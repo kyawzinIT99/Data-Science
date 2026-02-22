@@ -8,20 +8,23 @@ Welcome to the **AI Data Analysis Platform**. This platform provides automated i
 
 ```mermaid
 graph TD
-    Client[Browser / User] -->|HTTPS| Frontend[Frontend: Next.js]
-    Frontend -->|API Requests| Backend[Backend: FastAPI]
+    Client[Browser / User] -->|HTTPS| UnifiedApp["Unified App (Modal)"]
     
-    subgraph "Local Storage (.storage/)"
-        Backend -->|Save/Load| Files[Raw Uploads]
-        Backend -->|Query/Updates| DB[TinyDB: data.json]
-        Backend -->|Embeddings| VS[Vector Store: ChromaDB]
+    subgraph "Unified App (Modal)"
+        UnifiedApp -->|Serves| Frontend[Frontend: Next.js Static]
+        UnifiedApp -->|Executes| Backend[Backend: FastAPI]
+    end
+    
+    subgraph "Distributed Compute & Persistence"
+        Backend -->|Offload Tasks| Workers[Modal Workers]
+        Backend -->|Sync/Load| Vol["Modal Volume: /data/uploads"]
+        Backend -->|Metadata| DB[TinyDB: data.json]
     end
     
     subgraph "External AI Services"
         Backend -->|Analysis & Chat| OpenAI[OpenAI API]
+        Workers -->|Analysis| OpenAI
     end
-    
-    Backend -->|Data Processing| DS[NumPy/Pandas/Scikit-Learn]
 ```
 
 ---
@@ -65,21 +68,29 @@ MAX_FILE_SIZE_MB=50
 ALLOWED_ORIGINS=http://localhost:3000
 ```
 
-### Starting the Servers
+### ☁️ Cloud Deployment (Modal)
+The application can be deployed as a unified full-stack app on Modal:
 
-- **Backend**:
-  ```bash
-  cd backend
-  source .venv/bin/activate
-  uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-  ```
+1. **Deploy Workers**:
+   ```bash
+   cd backend
+   modal deploy modal_app.py
+   ```
 
-- **Frontend**:
-  ```bash
-  cd frontend
-  npm run dev
-  ```
-The app will be available at [http://localhost:3000](http://localhost:3000).
+2. **Deploy Unified Web App**:
+   ```bash
+   modal deploy deploy_api.py
+   ```
+The app will be available at your custom Modal URL (e.g., `https://...modal.run`).
+
+### 🛠 Local Development
+- **Backend**: `uvicorn app.main:app --reload`
+- **Frontend**: `npm run dev`
+The local app is available at [http://localhost:3000](http://localhost:3000).
+
+### 📁 Version Control & Security
+- **GitHub**: The project is synced to `https://github.com/kyawzinIT99/Data-Science.git`.
+- **Security**: `.gitignore` is configured to exclude local `.env` files and large datasets. Never push your `OPENAI_API_KEY` to GitHub.
 
 ---
 
@@ -112,8 +123,9 @@ For datasets containing dates and values (like prices or sales):
 - **Causal Analysis**: Move beyond correlation with automated **DAG (Directed Acyclic Graph)** models to identify true cause-and-effect.
 - **Data Synthesis**: Upload and correlate multiple disparate datasets (e.g., Marketing Spend vs. Sales) for holistic business analysis.
 
-### 6. Automated Reporting
-- **Exporting**: Generate audit-ready **PDF, PowerPoint (PPTX), and Excel (XLSX)** reports containing all AI-generated charts and insights.
+### 6. Automated Reporting & Sharing
+- **Exporting**: Generate audit-ready **PDF, PowerPoint (PPTX), and JSON** reports.
+- **Cloud Sharing**: Create secure, expiring links for your dashboards. In the cloud environment, these links use query parameters (e.g., `/shared?id=...`) for maximum compatibility with static hosting.
 
 ---
 
@@ -150,9 +162,9 @@ The platform employs professional-grade data science models to ensure accuracy a
 | Issue | Resolution |
 | :--- | :--- |
 | **Server 500 Error** | Ensure the backend is running and the `.env` file contains a valid OpenAI API key. Check `/tmp/backend_error.log` for details. |
-| **Segmentation Issues** | Ensure the dataset has at least 5 numeric rows for valid clustering. Small datasets use reduced `min_cluster_size` automatically. |
-| **File Not Found** | Ensure the file upload was successful. Refresh the "Files" list to sync the database. |
-| **OCR Failure** | Ensure `pytesseract` and `pdf2image` dependencies are correctly installed on your system. |
+| **CSV Not Found (Cloud)** | Check the Modal Volume. Files are stored in `/data/uploads`. Ensure the worker app and web-api are using synchronized volume paths. |
+| **404 on Share Link** | Ensure you are using the unified link `.../shared?id=...`. The backend handles these routes via a discovery-based catch-all router. |
+| **Segmentation Issues** | Ensure the dataset has at least 5 numeric rows for valid clustering. |
 
 ---
 
