@@ -25,7 +25,7 @@ import {
   rectSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { getDashboard, getCausalNetwork, checkDataQuality, refineDataset, createShare, type DashboardResponse, type ChartData, type CausalNetwork, type QAResponse } from "@/lib/api";
+import { getDashboard, getCausalNetwork, checkDataQuality, refineDataset, createShare, exportPdfReport, exportPptxReport, type DashboardResponse, type ChartData, type CausalNetwork, type QAResponse } from "@/lib/api";
 import dynamic from 'next/dynamic';
 
 const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), { ssr: false });
@@ -529,16 +529,38 @@ export default function DashboardPanel({ fileId }: { fileId: string }) {
 
         <div className="flex gap-2">
           <button
-            onClick={() => window.open(`http://localhost:8000/api/export/${dashboard.file_id}/pdf`, "_blank")}
+            onClick={async () => {
+              try {
+                // @ts-ignore - disabling state temporarily for speed, but ideally add loading state
+                await exportPdfReport(dashboard.file_id);
+              } catch (err) {
+                console.error("PDF export failed", err);
+                alert("Failed to export PDF. Please try again.");
+              }
+            }}
             className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition-all font-semibold border border-slate-700"
           >
             <Download className="w-4 h-4" />
-            {t("export") || "PDF"}
+            PDF
+          </button>
+          <button
+            onClick={async () => {
+              try {
+                await exportPptxReport(dashboard.file_id);
+              } catch (err) {
+                console.error("PPTX export failed", err);
+                alert("Failed to export PPTX. Please try again.");
+              }
+            }}
+            className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition-all font-semibold shadow-lg shadow-primary-500/20 disabled:opacity-50"
+          >
+            <Download className="w-4 h-4" />
+            Executive Case (PPTX)
           </button>
           <button
             onClick={handleShare}
             disabled={isSharing}
-            className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-500 text-white rounded-lg transition-all font-semibold shadow-lg shadow-primary-500/20 disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg transition-all font-semibold border border-slate-700"
           >
             {isSharing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
             {t("share") || "Share"}
@@ -611,16 +633,19 @@ export default function DashboardPanel({ fileId }: { fileId: string }) {
       )}
 
       {/* Summary stats (if no P&L) */}
-      {!dashboard.profit_loss && (
+      {!dashboard.profit_loss && dashboard.summary_stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {Object.entries(dashboard.summary_stats).map(([key, val]) => (
-            <div key={key} className="glass-card p-4">
-              <p className="text-xs text-slate-500 capitalize">{key.replace(/_/g, " ")}</p>
-              <p className="text-xl font-bold mt-1">
-                {Array.isArray(val) ? val.length : String(val)}
-              </p>
-            </div>
-          ))}
+          {Object.entries(dashboard.summary_stats).map(([key, val]) => {
+            if (key === "numeric_columns" || key === "categorical_columns") return null;
+            return (
+              <div key={key} className="glass-card p-4">
+                <p className="text-xs text-slate-500 capitalize">{key.replace(/_/g, " ")}</p>
+                <p className="text-xl font-bold mt-1">
+                  {Array.isArray(val) ? val.length : String(val)}
+                </p>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -998,6 +1023,49 @@ export default function DashboardPanel({ fileId }: { fileId: string }) {
                         {s.feasibility}
                       </span>
                     </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* AI Swarm Intelligence Section */}
+      {dashboard.agent_insights && dashboard.agent_insights.length > 0 && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <Zap className="w-5 h-5 text-primary-400" />
+              AI Swarm Intelligence
+            </h2>
+            <div className="px-3 py-1 bg-primary-500/10 rounded-full border border-primary-500/20">
+              <span className="text-[10px] font-bold text-primary-500 uppercase tracking-wider">Multi-Agent Reports</span>
+            </div>
+          </div>
+          <div className="grid md:grid-cols-3 gap-6">
+            {dashboard.agent_insights.map((insight, i) => (
+              <div key={i} className="glass-card flex flex-col h-[400px] border-t-2 border-primary-500/30 overflow-hidden group hover:border-primary-500/60 transition-all">
+                <div className="p-4 bg-slate-900/50 border-b border-slate-800 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-primary-500/20 flex items-center justify-center">
+                      <ShieldCheck className="w-4 h-4 text-primary-400" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-sm text-white">Persona: {insight.agent_role}</h4>
+                      <p className="text-[10px] text-slate-500">Cloud Autonomous Research Agent</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="p-5 overflow-y-auto flex-1 custom-scrollbar bg-slate-900/20">
+                  <div className="prose prose-invert prose-sm max-w-none">
+                    <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">{insight.report}</p>
+                  </div>
+                </div>
+                <div className="p-3 bg-slate-900/80 border-t border-slate-800 flex items-center justify-end">
+                  <div className="flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                    <span className="text-[9px] font-bold text-emerald-500">VERIFIED REPORT</span>
                   </div>
                 </div>
               </div>

@@ -33,7 +33,7 @@ from app.core.config import settings
 from app.models.schemas import (
     AnalysisResponse, ChartSuggestion, DashboardResponse,
     ProfitLossData, GrowthSuggestion, CorrelationMetric, AnomalyAlert,
-    DataQualityReport, FeatureImportanceMetric, DataSegment
+    DataQualityReport, FeatureImportanceMetric, DataSegment, AgentInsight
 )
 import math
 from app.utils.serialization import cleanup_serializable
@@ -84,20 +84,21 @@ def refine_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         if len(sample) > 0:
             # 2a. Date extraction: if it's named 'date', 'time', or 'timestamp'
             col_lower = col.lower()
-            if 'date' in col_lower or 'time' in col_lower or 'stamp' in col_lower:
+            if 'date' in col_lower or 'time' in col_lower or 'stamp' in col_lower or 'day' in col_lower or 'month' in col_lower or 'year' in col_lower:
                 try:
                     # Parse with format mixed and dayfirst to catch European dates (25-02-2022)
                     parsed_dates = pd.to_datetime(df[col], errors='coerce', format='mixed', dayfirst=True)
                     
                     # Also try a straight parse for non-standard formats that mixed struggles with
-                    if parsed_dates.isna().sum() > len(df) * 0.5:
+                    if parsed_dates.isna().sum() > len(df) * 0.7:
                         parsed_dates = pd.to_datetime(df[col], errors='coerce')
 
-                    # Clean up: forward fill, then backward fill to ensure no NaNs break Recharts
-                    parsed_dates = parsed_dates.ffill().bfill() 
+                    # Clean up: only fill if we have some data
+                    if parsed_dates.notna().any():
+                        parsed_dates = parsed_dates.ffill().bfill() 
+                        df[col] = parsed_dates
                     
-                    df[col] = parsed_dates
-                    # Convert to string ISO format so JSON can serialize it
+                    # Store as original datetime for now, let JSON serialier handle the final conversion
                     df[col] = df[col].dt.strftime('%Y-%m-%d')
                     continue
                 except Exception as e:
@@ -511,327 +512,153 @@ def generate_dashboard(file_id: str, text: str, df: pd.DataFrame | None = None, 
         feature_importance = []
         segments = []
         time_series_decomp = None
+        agent_insights = []
         detection_profile = "Standard Dataset"
 
         if df is not None:
-            # --- Auto-Detection Logic ---
-            row_count = len(df)
-            try:
-                quality = calculate_data_quality(df)
-                data_quality = quality
-            except Exception as e:
-                logger.error(f"Data quality calculation failed: {e}")
-                quality = None
-                data_quality = None
+            # --- Parallel Analytics execution ---
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                # 1. Start all long-running tasks
+                future_audit = None
+                modal_audit_run = get_modal_func("run_data_audit")
+                if modal_audit_run:
+                    from app.services.chat import _find_file_path
+                    from app.utils.modal import sync_file_to_modal
+                    f_path = _find_file_path(file_id)
+                    if f_path and sync_file_to_modal(file_id, f_path):
+                        logger.info("Parallelizing data audit (Modal)...")
+                        future_audit = executor.submit(modal_audit_run.remote, file_id, os.path.splitext(f_path)[1].lower())
 
-            try:
-                anomalies = detect_anomalies(df)
-            except Exception as e:
-                logger.error(f"Anomaly detection failed: {e}")
-                anomalies = []
-            
-            profile_parts = []
-            if row_count > 100: profile_parts.append("High-Volume")
-            else: profile_parts.append("Micro-Dataset")
-            
-            # Consider it unrefined if score is low OR there are significant anomalies
-            quality_score = quality.score if quality else 100.0
-            if quality_score < 80 or len(anomalies) > (row_count * 0.05): 
-                profile_parts.append("Unrefined (Noisy)")
-            else: 
-                profile_parts.append("Refined")
-            
+                logger.info("Parallelizing correlations, feature importance, and segments...")
+                future_corr = executor.submit(calculate_correlations, df)
+                future_feat = executor.submit(calculate_feature_importance, df)
+                future_segments = executor.submit(classify_segments, df, file_id=file_id)
+                
+                # Forecasting logic: detect columns first
+                import re
+                date_pattern = re.compile(r"date|time|stamp|day|month|year|period", re.I)
+                val_pattern = re.compile(r"price|revenue|sales|total|value|amount|cost|expense|profit|units|qty", re.I)
+                
+                date_col = next((c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c]) or date_pattern.search(str(c))), None)
+                future_forecast = None
+                if date_col:
+                    value_col = next((c for c in df.columns if c != date_col and pd.api.types.is_numeric_dtype(df[c]) and val_pattern.search(str(c))), None)
+                    if not value_col:
+                        num_cols = df.select_dtypes(include=[np.number]).columns
+                        if not num_cols.empty: 
+                            # Avoid picking index-like columns if possible
+                            value_col = next((c for c in num_cols if c != date_col and not any(x in str(c).lower() for x in ["id", "index", "key"])), num_cols[0])
+                    
+                    if value_col:
+                        def _run_forecast_wrapper(f_id, d_col, v_col, d_frame):
+                            try:
+                                m_forecast = get_modal_func("run_forecast")
+                                if m_forecast:
+                                    from app.services.chat import _find_file_path
+                                    from app.utils.modal import sync_file_to_modal
+                                    fp = _find_file_path(f_id)
+                                    if fp and sync_file_to_modal(f_id, fp):
+                                        r = m_forecast.remote(file_id=f_id, file_ext=os.path.splitext(fp)[1].lower(), date_col=d_col, value_col=v_col)
+                                        return r["forecast"], r["decomposition"]
+                                t_path = f"/tmp/{f_id}_forecast.csv"
+                                d_frame[[d_col, v_col]].to_csv(t_path, index=False)
+                                forecaster = PriceForecaster(t_path, date_column=d_col, price_column=v_col)
+                                forecaster.load_data(); forecaster.train_model()
+                                f_df = forecaster.predict_next_months(3); dec = forecaster.decompose_series()
+                                if os.path.exists(t_path): os.remove(t_path)
+                                return f_df.to_dict(orient="records") if not f_df.empty else [], dec
+                            except Exception: return [], None
+                        future_forecast = executor.submit(_run_forecast_wrapper, file_id, date_col, value_col, df)
+
+                # 2. Collect base results
+                if future_audit:
+                    try:
+                        ra = future_audit.result()
+                        if ra and isinstance(ra, dict) and "error" not in ra:
+                            anomalies = [AnomalyAlert(**a) for a in ra.get("anomalies", [])]
+                            data_quality = DataQualityReport(**ra.get("quality", {}))
+                    except Exception as e:
+                        logger.error(f"Modal audit failed: {e}")
+                
+                if not data_quality: data_quality = calculate_data_quality(df)
+                if not anomalies: anomalies = detect_anomalies(df)
+                    
+                correlations = future_corr.result()
+                feature_importance = future_feat.result()
+                segments = future_segments.result()
+                
+                if future_forecast:
+                    try:
+                        f_res = future_forecast.result()
+                        if f_res and len(f_res) == 2:
+                            _, time_series_decomp = f_res
+                    except Exception as e:
+                        logger.error(f"Forecasting failed: {e}")
+
+            # --- Summary Stat & Profile Setup ---
+            row_count = len(df)
+            profile_parts = [("High-Volume" if row_count > 100 else "Micro-Dataset")]
+            quality_score = data_quality.score if data_quality else 100.0
+            profile_parts.append("Unrefined" if (quality_score < 80 or len(anomalies) > (row_count * 0.05)) else "Refined")
             detection_profile = " | ".join(profile_parts)
 
-            data_info = f"""
-This is structured tabular data:
-- Columns: {df.columns.tolist()}
-- Types: {df.dtypes.to_string()}
-- Sample rows:
-{df.head(5).to_string()}
-- Statistics:
-{df.describe().to_string()}"""
             summary_stats = {
-                "total_rows": len(df),
+                "total_rows": row_count,
                 "total_columns": len(df.columns),
                 "numeric_columns": df.select_dtypes(include="number").columns.tolist(),
                 "categorical_columns": df.select_dtypes(include="object").columns.tolist(),
             }
 
-            # --- Professional DS Intelligence (each section isolated) ---
-            anomalies = []
-            quality_score = None
+            # --- P&L Calculation (Robust) ---
+            import re
+            rev_patterns = [r"revenue", r"sales", r"income", r"total.?val", r"turnover"]
+            cost_patterns = [r"cost", r"expense", r"spending", r"outgo", r"total.?cost"]
             
-            # --- Modal Remote Execution Hook for Audit ---
-            modal_audit_run = get_modal_func("run_data_audit")
-            if modal_audit_run:
+            rev_c = next((c for c in df.columns if any(re.search(p, str(c), re.I) for p in rev_patterns)), None)
+            cost_c = next((c for c in df.columns if any(re.search(p, str(c), re.I) for p in cost_patterns)), None)
+            if rev_c and cost_c:
                 try:
-                    from app.utils.modal import sync_file_to_modal
-                    from app.services.chat import _find_file_path
-                    f_path = _find_file_path(file_id)
-                    if f_path and sync_file_to_modal(file_id, f_path):
-                        logger.info(f"Offloading data audit to Modal (via Volume: {file_id})...")
-                        remote_audit = modal_audit_run.remote(file_id, os.path.splitext(f_path)[1].lower())
-                        if remote_audit and "error" not in remote_audit:
-                            anomalies = [AnomalyAlert(**a) for a in remote_audit["anomalies"]]
-                            quality_score = DataQualityReport(**remote_audit["quality"])
-                            logger.info("Successfully received Modal audit results.")
-                except Exception as e:
-                    logger.warning(f"Modal data audit failed, using local fallback: {e}")
-
-            try:
-                correlations = calculate_correlations(df)
-            except Exception as e:
-                logger.error(f"Correlation calculation failed: {e}")
-                correlations = []
-
-            if not anomalies:
-                try:
-                    anomalies = detect_anomalies(df)
-                except Exception as e:
-                    logger.error(f"Anomaly detection failed: {e}")
-                    anomalies = []
-
-            try:
-                feature_importance = calculate_feature_importance(df)
-            except Exception as e:
-                logger.error(f"Feature importance failed: {e}")
-                feature_importance = []
-
-            try:
-                segments = classify_segments(df, file_id=file_id)
-            except Exception as e:
-                logger.error(f"Segment classification failed: {e}")
-                segments = []
-
-            if not quality_score:
-                try:
-                    quality_score = calculate_data_quality(df)
-                except Exception as e:
-                    logger.error(f"Quality score calculation failed: {e}")
-                    quality_score = None
-
-            # --- Time-Series Decomposition ---
-            try:
-                # Look for a date column and a likely price/value column
-                date_col = None
-                for col in df.columns:
-                    col_lower = str(col).lower()
-                    if pd.api.types.is_datetime64_any_dtype(df[col]) or "date" in col_lower or "time" in col_lower or "stamp" in col_lower:
-                        date_col = col
-                        break
-                
-                if date_col:
-                    value_col = None
-                    for col in df.columns:
-                        if col != date_col and pd.api.types.is_numeric_dtype(df[col]):
-                            c_lower = str(col).lower()
-                            if any(x in c_lower for x in ["price", "revenue", "sales", "total", "value", "amount"]):
-                                value_col = col
-                                break
-                    
-                    if not value_col:
-                        # Fallback to any numeric column
-                        numeric_cols = df.select_dtypes(include=[np.number]).columns
-                        if len(numeric_cols) > 0:
-                            value_col = numeric_cols[0]
-                    
-                    if value_col:
-                        price_col = value_col # Ensure price_col is set to value_col
-                        
-                        try:
-                            # --- Modal Remote Execution Hook ---
-                            modal_forecast_run = get_modal_func("run_forecast")
-                            if modal_forecast_run:
-                                try:
-                                    from app.utils.modal import sync_file_to_modal
-                                    from app.services.chat import _find_file_path
-                                    f_path = _find_file_path(file_id)
-                                    
-                                    if f_path and sync_file_to_modal(file_id, f_path):
-                                        logger.info(f"Offloading forecasting to Modal (via Volume: {file_id})...")
-                                        remote_result = modal_forecast_run.remote(
-                                            file_id=file_id,
-                                            file_ext=os.path.splitext(f_path)[1].lower(),
-                                            date_col=date_col,
-                                            value_col=price_col
-                                        )
-                                    else:
-                                        logger.info("Offloading forecasting to Modal (via direct content)...")
-                                        # Fallback to direct bytes transfer
-                                        with open(f_path, "rb") as f:
-                                            content = f.read()
-                                        remote_result = modal_forecast_run.remote(
-                                            file_id=file_id,
-                                            file_ext=os.path.splitext(f_path)[1].lower(),
-                                            date_col=date_col,
-                                            value_col=price_col,
-                                            file_content=content
-                                        )
-                                    forecast_data = remote_result["forecast"]
-                                    time_series_decomp = remote_result["decomposition"]
-                                except Exception as e:
-                                    logger.warning(f"Modal forecasting failed, falling back to local: {e}")
-                                    modal_forecast_run = None
-
-                            if not modal_forecast_run:
-                                # Save temp file for PriceForecaster
-                                temp_path = f"/tmp/{file_id}_forecast.csv"
-                                df[[date_col, price_col]].to_csv(temp_path, index=False)
-                                
-                                forecaster = PriceForecaster(temp_path, date_column=date_col, price_column=price_col)
-                                forecaster.load_data()
-                                forecaster.train_model()
-                                forecast_df = forecaster.predict_next_months(3)
-                                forecast_data = forecast_df.to_dict(orient="records") if not forecast_df.empty else []
-                                time_series_decomp = forecaster.decompose_series()
-                                
-                                if os.path.exists(temp_path):
-                                    os.remove(temp_path)
-                        except Exception as e:
-                            logger.error(f"Forecasting failed: {e}")
-                            time_series_decomp = None
-            except Exception as e:
-                logger.error(f"Time-series decomposition failed: {e}")
-                time_series_decomp = None
-
-            # --- P&L Calculation Logic ---
-            cols = [str(c).lower() for c in df.columns]
-            rev_col = None
-            cost_col = None
-
-            for i, c in enumerate(cols):
-                if "revenue" in c or "sales" in c or "income" in c:
-                    rev_col = df.columns[i]
-                if "cost" in c or "expense" in c or "spending" in c:
-                    cost_col = df.columns[i]
-            
-            if rev_col and cost_col:
-                try:
-                    total_rev = safe_float(df[rev_col].sum())
-                    total_cost = safe_float(df[cost_col].sum())
+                    total_rev = safe_float(df[rev_c].sum()); total_cost = safe_float(df[cost_c].sum())
                     net_profit = total_rev - total_cost
                     margin = (net_profit / total_rev * 100) if total_rev != 0 else 0
-                    profit_loss = ProfitLossData(
-                        total_revenue=round(total_rev, 2),
-                        total_cost=round(total_cost, 2),
-                        net_profit=round(net_profit, 2),
-                        margin_percentage=round(safe_float(margin), 2)
-                    )
-                except Exception as e:
-                    logger.warning(f"Profit/Loss partial calculation failed: {e}")
-                    profit_loss = None
+                    profit_loss = ProfitLossData(total_revenue=round(total_rev, 2), total_cost=round(total_cost, 2), net_profit=round(net_profit, 2), margin_percentage=round(safe_float(margin), 2))
+                except Exception: pass
         else:
             data_info = f"Document text (first 4000 chars):\n{text[:4000]}"
             summary_stats = {"document_length": len(text), "type": "unstructured"}
 
-        pl_context = ""
-        if profit_loss:
-            pl_context = f"\nFinancial Stats: Revenue={profit_loss.total_revenue}, Cost={profit_loss.total_cost}, Profit={profit_loss.net_profit}, Margin={profit_loss.margin_percentage}%"
+        pl_context = f"\nFinancial Stats: Revenue={profit_loss.total_revenue}, Cost={profit_loss.total_cost}, Profit={profit_loss.net_profit}, Margin={profit_loss.margin_percentage}%" if profit_loss else ""
+        ds_context = f"\nKey Correlations: {len(correlations)} analyzed.\nData Anomalies: {len(anomalies)} detected."
 
-        ds_context = ""
-        if correlations:
-            ds_context += "\nKey Correlations:\n" + "\n".join([f"- {c.column_a} and {c.column_b}: {c.correlation} ({c.description})" for c in correlations])
-        if anomalies:
-            ds_context += "\nData Anomalies Detected:\n" + "\n".join([f"- {a.column} at row {a.row_index}: {a.value} ({a.reason})" for a in anomalies])
+        # Synthesizer Prompt Preparation
+        prompt_data = f"{data_info}\n{pl_context}\n{ds_context}"
 
-        # --- Multi-Agent Swarm Logic ---
-        prompt_data = f"""
-{data_info}
-{pl_context}
-{ds_context}"""
-
-        agents = {
-            "CFO": {"role": "CFO Persona (Finance & Cost Optimization)", "focus": "Analyze P&L, profit margins, cost centers, and overall financial efficiency. Give 2 highly specific financial recommendations."},
-            "Risk": {"role": "Risk Assessor Persona", "focus": "Analyze anomalies, outliers, and variance. Identify potential operational or financial risks and give 2 specific mitigation recommendations."},
-            "CMO": {"role": "CMO Persona (Marketing & Segments)", "focus": "Analyze clusters, market segments, and feature importance. Give 2 specific strategic recommendations for growth and targeting."}
+        # --- Multi-Agent Swarm (Parallel) ---
+        agents_cfg = {
+            "CFO": {"role": "CFO Persona", "focus": "Analyze financial efficiency."},
+            "Risk": {"role": "Risk Assessor Persona", "focus": "Analyze anomalies and risks."},
+            "CMO": {"role": "CMO Persona", "focus": "Analyze market segments."}
         }
-
         agent_responses = {}
-        
-        import concurrent.futures
-
-        def run_agent(persona_name, persona_config):
-            sys_prompt = f"You are the {persona_config['role']}. {persona_config['focus']}"
-            user_prompt = f"Based on the following data, provide your analysis and recommendations:\n{prompt_data}"
+        def run_agent_task(name, cfg_item):
             try:
-                ai_client = _get_client(settings.OPENAI_API_KEY)
-                resp = ai_client.chat.completions.create(
-                    model=settings.ANALYSIS_MODEL,
-                    messages=[
-                        {"role": "system", "content": sys_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    temperature=0.4,
-                )
-                return persona_name, resp.choices[0].message.content
-            except Exception as e:
-                logger.error(f"Agent {persona_name} failed: {e}")
-                return persona_name, "Analysis unavailable."
+                m_agent = get_modal_func("run_agent_analysis")
+                if m_agent: return name, m_agent.remote(cfg_item['role'], cfg_item['focus'], prompt_data)
+                ai_c = _get_client(settings.OPENAI_API_KEY)
+                r = ai_c.chat.completions.create(model=settings.ANALYSIS_MODEL, messages=[{"role": "system", "content": f"You are the {cfg_item['role']}. {cfg_item['focus']}"}, {"role": "user", "content": f"Data:\n{prompt_data}"}], temperature=0.4)
+                return name, r.choices[0].message.content
+            except Exception: return name, "Analysis unavailable."
 
-        modal_agent_run = get_modal_func("run_agent_analysis")
-        if modal_agent_run:
-            try:
-                logger.info("Offloading agent swarm to Modal...")
-                agent_items = list(agents.items())
-                # Use Modal map for parallel execution across workers
-                results = modal_agent_run.map(
-                    [cfg['role'] for _, cfg in agent_items],
-                    [cfg['focus'] for _, cfg in agent_items],
-                    [prompt_data] * len(agent_items)
-                )
-                for i, result in enumerate(results):
-                    name = agent_items[i][0]
-                    agent_responses[name] = result
-            except Exception as e:
-                logger.warning(f"Modal agent swarm failed, falling back to local: {e}")
-                modal_agent_run = None # Force fallback
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            fut_agents = [executor.submit(run_agent_task, n, c) for n, c in agents_cfg.items()]
+            for f in concurrent.futures.as_completed(fut_agents):
+                name, output = f.result()
+                agent_responses[name] = output
+                agent_insights.append(AgentInsight(agent_role=name, report=output))
 
-        if not modal_agent_run:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-                futures = [executor.submit(run_agent, name, cfg) for name, cfg in agents.items()]
-                for future in concurrent.futures.as_completed(futures):
-                    name, output = future.result()
-                    agent_responses[name] = output
-
-        # Synthesizer Agent + Chart Generation
-        synthesis_prompt = f"""
-You are the Executive Synthesizer. You have received reports from your CFO, Risk Assessor, and CMO personas.
-Review their debates and findings, and synthesize them into exactly 3-4 rigorous, data-driven "Growth Suggestions".
-
-CFO Analysis:
-{agent_responses.get('CFO')}
-
-Risk Analysis:
-{agent_responses.get('Risk')}
-
-CMO Analysis:
-{agent_responses.get('CMO')}
-
-Data Context for Charts:
-{data_info}
-
-Return JSON strictly matching this format:
-{{
-    "charts": [
-        {{
-            "chart_type": "bar|line|pie|scatter|area",
-            "title": "Chart title",
-            "description": "What this shows.",
-            "x_axis": "label or null",
-            "y_axis": "label or null",
-            "data": [{{"label": "x", "value": 1}}]
-        }}
-    ],
-    "growth_suggestions": [
-        {{
-            "title": "Synthesized Strategic Recommendation",
-            "description": "Detailed explanation incorporating multi-agent findings",
-            "impact": "High/Medium/Low",
-            "feasibility": "High/Medium/Low"
-        }}
-    ]
-}}"""
+        # Synthesizer
+        s_prompt = f"Executive Synthesis from CFO: {agent_responses.get('CFO')} | Risk: {agent_responses.get('Risk')} | CMO: {agent_responses.get('CMO')}\nData Context: {data_info}"
 
         system_prompt = "You are the Executive Synthesizer AI. Return valid JSON only."
 
@@ -840,7 +667,7 @@ Return JSON strictly matching this format:
                 model=settings.ANALYSIS_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": synthesis_prompt},
+                    {"role": "user", "content": s_prompt},
                 ],
                 response_format={"type": "json_object"},
                 temperature=0.3,
@@ -893,7 +720,8 @@ Return JSON strictly matching this format:
             data_quality=cleanup_serializable(data_quality) if data_quality else None,
             feature_importance=cleanup_serializable(feature_importance) if feature_importance else None,
             segments=cleanup_serializable(segments) if segments else None,
-            time_series_decomposition=cleanup_serializable(time_series_decomp) if time_series_decomp else None
+            time_series_decomposition=cleanup_serializable(time_series_decomp) if time_series_decomp else None,
+            agent_insights=cleanup_serializable(agent_insights) if agent_insights else None
         )
     except Exception as e:
         logger.exception(f"Error generating dashboard for file {file_id}")

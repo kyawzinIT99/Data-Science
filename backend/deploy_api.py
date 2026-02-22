@@ -4,6 +4,12 @@ import os
 # Define the image with all necessary dependencies
 image = (
     modal.Image.debian_slim()
+    .apt_install(
+        "tesseract-ocr",
+        "poppler-utils",
+        "libgl1-mesa-glx",
+        "libfontconfig1"
+    )
     .pip_install_from_requirements("requirements.txt")
     .pip_install(
         "pandas",
@@ -18,7 +24,14 @@ image = (
         "pingouin",
         "openpyxl",
         "aiofiles",
-        "python-jose[cryptography]"
+        "python-jose[cryptography]",
+        "reportlab",
+        "python-pptx",
+        "pypdf",
+        "python-docx",
+        "pdf2image",
+        "pytesseract",
+        "matplotlib"
     )
     .env({
         "UPLOAD_DIR": "/data/uploads",

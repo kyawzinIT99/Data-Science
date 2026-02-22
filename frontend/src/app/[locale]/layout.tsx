@@ -21,6 +21,8 @@ export const metadata: Metadata = {
   description: "Upload and analyze your documents with AI",
 };
 
+import LoginWall from "@/components/auth/LoginWall";
+
 export default async function RootLayout({
   children,
   params: { locale }
@@ -39,7 +41,9 @@ export default async function RootLayout({
         <NextIntlClientProvider messages={messages}>
           <ThemeProvider>
             <ParticleBackground />
-            {children}
+            <LoginWall>
+              {children}
+            </LoginWall>
           </ThemeProvider>
         </NextIntlClientProvider>
       </body>

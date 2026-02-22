@@ -1,6 +1,31 @@
 import axios from "axios";
 
-const api = axios.create({ baseURL: "/api", timeout: 120000 });
+const api = axios.create({ baseURL: "/api", timeout: 600000 });
+
+// --- Auth Interceptors ---
+if (typeof window !== "undefined") {
+  api.interceptors.request.use((config) => {
+    const token = localStorage.getItem("kyawzin_access_token");
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  });
+
+  api.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      if (error.response?.status === 401) {
+        localStorage.removeItem("kyawzin_access_token");
+        if (typeof window !== "undefined") {
+          // If not a shared link page, we might want to signal a logout/re-auth
+          // For now, let the component state handle it via localstorage changes
+        }
+      }
+      return Promise.reject(error);
+    }
+  );
+}
 
 // --- Types ---
 
@@ -82,6 +107,18 @@ export interface AnomalyAlert {
   reason: string;
 }
 
+export interface DataSegment {
+  name: string;
+  size: number;
+  characteristics: string;
+  growth_strategy: string;
+}
+
+export interface AgentInsight {
+  agent_role: string;
+  report: string;
+}
+
 export interface DashboardResponse {
   file_id: string;
   detection_profile?: string;
@@ -95,6 +132,7 @@ export interface DashboardResponse {
   feature_importance?: FeatureImportanceMetric[];
   segments?: DataSegment[];
   time_series_decomposition?: TimeSeriesDecomposition | null;
+  agent_insights?: AgentInsight[];
 }
 
 export interface TimeSeriesDecomposition {
@@ -418,4 +456,14 @@ export async function setApiKey(key: string): Promise<ApiKeyStatus> {
 
 export async function removeApiKey(): Promise<void> {
   await api.delete("/settings/api-key");
+}
+
+// --- Auth ---
+
+export async function login(username: string, password: string): Promise<{ access_token: string }> {
+  const res = await api.post("/login", { username, password });
+  if (res.data.access_token) {
+    localStorage.setItem("kyawzin_access_token", res.data.access_token);
+  }
+  return res.data;
 }

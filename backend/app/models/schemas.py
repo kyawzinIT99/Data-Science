@@ -110,6 +110,10 @@ class DataSegment(BaseModel):
     characteristics: str
     growth_strategy: str
 
+class AgentInsight(BaseModel):
+    agent_role: str
+    report: str
+
 class TimeSeriesDecomposition(BaseModel):
     dates: list[str]
     observed: list[float]
@@ -130,6 +134,7 @@ class DashboardResponse(BaseModel):
     feature_importance: list[FeatureImportanceMetric] | None = None
     segments: list[DataSegment] | None = None
     time_series_decomposition: TimeSeriesDecomposition | None = None
+    agent_insights: list[AgentInsight] | None = None
 
 
 # --- Multi-file Comparison ---

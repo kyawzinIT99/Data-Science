@@ -19,13 +19,17 @@ app_logger.setLevel(logging.DEBUG)
 app_logger.info("Backend application starting...")
 
 from app.core.config import settings
-from app.api.routes import upload, analysis, chat, export, compare, cleaning, sharing, language, email_report, apikeys, forecast, causal, qa, refine
+from app.api.routes import upload, analysis, chat, export, compare, cleaning, sharing, language, email_report, apikeys, forecast, causal, qa, refine, auth
+from app.core.security import verify_token
+from fastapi import Depends
 
 app = FastAPI(
     title="AI Data Analysis Platform",
     description="Upload documents and analyze them with AI",
     version="1.0.0",
 )
+
+# Exception handlers... (already there, but I'll keep context)
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
@@ -50,20 +54,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(upload.router, prefix="/api", tags=["Upload"])
-app.include_router(analysis.router, prefix="/api", tags=["Analysis"])
-app.include_router(chat.router, prefix="/api", tags=["Chat"])
-app.include_router(export.router, prefix="/api", tags=["Export"])
-app.include_router(compare.router, prefix="/api", tags=["Compare"])
-app.include_router(cleaning.router, prefix="/api", tags=["Cleaning"])
+# 1. Public Auth Route
+app.include_router(auth.router, prefix="/api", tags=["Auth"])
+
+# 2. Protected Data Routes
+protected = [Depends(verify_token)]
+app.include_router(upload.router, prefix="/api", tags=["Upload"], dependencies=protected)
+app.include_router(analysis.router, prefix="/api", tags=["Analysis"], dependencies=protected)
+app.include_router(chat.router, prefix="/api", tags=["Chat"], dependencies=protected)
+app.include_router(export.router, prefix="/api", tags=["Export"], dependencies=protected)
+app.include_router(compare.router, prefix="/api", tags=["Compare"], dependencies=protected)
+app.include_router(cleaning.router, prefix="/api", tags=["Cleaning"], dependencies=protected)
+app.include_router(language.router, prefix="/api", tags=["Language"], dependencies=protected)
+app.include_router(email_report.router, prefix="/api", tags=["Email"], dependencies=protected)
+app.include_router(apikeys.router, prefix="/api", tags=["Settings"], dependencies=protected)
+app.include_router(forecast.router, prefix="/api", tags=["Forecasting"], dependencies=protected)
+app.include_router(causal.router, prefix="/api", tags=["Causal"], dependencies=protected)
+app.include_router(qa.router, prefix="/api", tags=["Quality"], dependencies=protected)
+app.include_router(refine.router, prefix="/api", tags=["Refinement"], dependencies=protected)
+
+# 3. Public Sharing Route (for recipients of shared links)
 app.include_router(sharing.router, prefix="/api", tags=["Sharing"])
-app.include_router(language.router, prefix="/api", tags=["Language"])
-app.include_router(email_report.router, prefix="/api", tags=["Email"])
-app.include_router(apikeys.router, prefix="/api", tags=["Settings"])
-app.include_router(forecast.router, prefix="/api", tags=["Forecasting"])
-app.include_router(causal.router, prefix="/api", tags=["Causal"])
-app.include_router(qa.router, prefix="/api", tags=["Quality"])
-app.include_router(refine.router, prefix="/api", tags=["Refinement"])
 
 
 from fastapi.staticfiles import StaticFiles

@@ -7,6 +7,12 @@ app = modal.App("ai-data-analysis")
 # Define the environment image with all DS dependencies and app code
 image = (
     modal.Image.debian_slim()
+    .apt_install(
+        "tesseract-ocr",
+        "poppler-utils",
+        "libgl1-mesa-glx",
+        "libfontconfig1"
+    )
     .pip_install(
         "pandas",
         "numpy",
@@ -19,7 +25,14 @@ image = (
         "networkx",
         "pingouin",
         "openpyxl",
-        "aiofiles"
+        "aiofiles",
+        "reportlab",
+        "python-pptx",
+        "pypdf",
+        "python-docx",
+        "pdf2image",
+        "pytesseract",
+        "matplotlib"
     )
     .env({"PYTHONPATH": "/root"})
     .add_local_dir(
