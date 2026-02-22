@@ -1,0 +1,199 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Dark theme (default) */
+:root,
+[data-theme="dark"] {
+  --bg-primary: #0f172a;
+  --bg-secondary: #1e293b;
+  --bg-card: #1e293b;
+  --bg-card-rgb: 30, 41, 59;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent: #3b82f6;
+  --border: rgba(59, 130, 246, 0.1);
+  --input-bg: #1e293b;
+  --hover-bg: #334155;
+}
+
+/* Light theme */
+[data-theme="light"] {
+  --bg-primary: #f8fafc;
+  --bg-secondary: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-rgb: 255, 255, 255;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --accent: #2563eb;
+  --border: rgba(0, 0, 0, 0.08);
+  --input-bg: #f1f5f9;
+  --hover-bg: #e2e8f0;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color 0.3s, color 0.3s;
+}
+
+.glass-card {
+  background: rgba(var(--bg-card-rgb), 0.8);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  transition: background 0.3s, border-color 0.3s;
+}
+
+[data-theme="light"] .glass-card {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.gradient-border {
+  background: linear-gradient(var(--bg-card), var(--bg-card)) padding-box,
+    linear-gradient(135deg, #3b82f6, #8b5cf6, #ec4899) border-box;
+  border: 1px solid transparent;
+  border-radius: 16px;
+}
+
+.pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+
+  0%,
+  100% {
+    box-shadow: 0 0 5px rgba(59, 130, 246, 0.3);
+  }
+
+  50% {
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.6);
+  }
+}
+
+/* Light theme overrides for common Tailwind classes */
+[data-theme="light"] .bg-slate-800 {
+  background-color: #f1f5f9;
+}
+
+[data-theme="light"] .bg-slate-700 {
+  background-color: #e2e8f0;
+}
+
+[data-theme="light"] .bg-dark-900 {
+  background-color: #f8fafc;
+}
+
+[data-theme="light"] .bg-dark-950\/80 {
+  background-color: rgba(255, 255, 255, 0.9);
+}
+
+[data-theme="light"] .text-slate-100 {
+  color: #0f172a;
+}
+
+[data-theme="light"] .text-slate-200 {
+  color: #1e293b;
+}
+
+[data-theme="light"] .text-slate-300 {
+  color: #334155;
+}
+
+[data-theme="light"] .text-slate-400 {
+  color: #64748b;
+}
+
+[data-theme="light"] .text-slate-500 {
+  color: #94a3b8;
+}
+
+[data-theme="light"] .border-slate-800 {
+  border-color: #e2e8f0;
+}
+
+[data-theme="light"] .bg-slate-800\/50 {
+  background-color: rgba(241, 245, 249, 0.5);
+}
+
+[data-theme="light"] .hover\:bg-slate-700:hover {
+  background-color: #e2e8f0;
+}
+
+[data-theme="light"] .hover\:bg-slate-600:hover {
+  background-color: #cbd5e1;
+}
+
+[data-theme="light"] .hover\:bg-slate-800:hover {
+  background-color: #f1f5f9;
+}
+
+[data-theme="light"] .bg-primary-600\/20 {
+  background-color: rgba(37, 99, 235, 0.1);
+}
+
+[data-theme="light"] .text-primary-500 {
+  color: #2563eb;
+}
+
+[data-theme="light"] .text-primary-400 {
+  color: #1d4ed8;
+}
+
+/* Darker blue for light mode */
+[data-theme="light"] .text-green-400 {
+  color: #15803d;
+}
+
+/* Darker green */
+[data-theme="light"] .text-yellow-400 {
+  color: #a16207;
+}
+
+/* Darker yellow/gold */
+[data-theme="light"] .text-red-400 {
+  color: #b91c1c;
+}
+
+/* Darker red */
+[data-theme="light"] .text-blue-400 {
+  color: #1d4ed8;
+}
+
+[data-theme="light"] .text-purple-400 {
+  color: #7e22ce;
+}
+
+[data-theme="light"] .text-slate-500 {
+  color: #475569;
+}
+
+/* Darker muted text */
+[data-theme="light"] .text-slate-400 {
+  color: #334155;
+}
+
+[data-theme="light"] .text-slate-300 {
+  color: #1e293b;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 3px;
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+}
